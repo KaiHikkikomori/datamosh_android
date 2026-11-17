@@ -11,7 +11,7 @@
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
 ![Media3](https://img.shields.io/badge/Media3-ExoPlayer-FF5C9A)
 
-[![Скачать APK](https://img.shields.io/github/v/release/hxlderpng/datamosh_android?label=Скачать%20APK&logo=android&logoColor=white&color=3DDC84&style=for-the-badge)](https://github.com/hxlderpng/datamosh_android/releases/latest)
+[![Скачать APK](https://img.shields.io/github/v/release/kaihikkikomori/datamosh_android?label=Скачать%20APK&logo=android&logoColor=white&color=3DDC84&style=for-the-badge)](https://github.com/kaihikkikomori/datamosh_android/releases/latest)
 
 [Установка](#-установка) •
 [Возможности](#-возможности) •
