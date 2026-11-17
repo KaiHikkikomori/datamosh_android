@@ -1,3 +1,4 @@
+<div align="center">
 
 # DATAMOSH FM
 
@@ -111,6 +112,7 @@ app/src/main/
     ├── mipmap-anydpi-v26/     # адаптивная иконка приложения
     └── layout/bg_player.xml   # видео-фон (TextureView, обрезка по центру)
 
+```
 ---
 
 <div align="center">
