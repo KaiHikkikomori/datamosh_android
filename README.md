@@ -76,7 +76,7 @@
 ### Шаги
 1. Склонируй репозиторий или скачай архив:
    ```bash
-   git clone https://github.com/hxlderpng/datamosh_android.git
+   git clone https://github.com/kaihikkikomori/datamosh_android.git
    ```
 2. В Android Studio: **File → Open** и выбери папку проекта (где лежит `settings.gradle.kts`).
 3. Дождись **Gradle Sync**. В первый раз это занимает несколько минут.
