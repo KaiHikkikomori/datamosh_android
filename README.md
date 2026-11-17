@@ -3,6 +3,7 @@
 # DATAMOSH FM
 
 **Android-плеер для интернет-радио DATAMOSH**
+
 Живой эфир, обложки, лайки и анимированный фон. Всё в одном лёгком приложении.
 
 ![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)
