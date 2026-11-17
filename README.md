@@ -1,6 +1,3 @@
-<div align="center">
-
-<img src="app/src/main/res/drawable-nodpi/logo_apk.jpg" width="140" alt="DATAMOSH FM">
 
 # DATAMOSH FM
 
