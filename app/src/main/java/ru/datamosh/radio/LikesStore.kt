@@ -45,7 +45,8 @@ object LikesStore {
                 val f = File(dir, "${t.id}.jpg")
                 f.writeBytes(httpGet(t.art))
                 f.absolutePath
-            }.getOrNull()
+            }.onFailure { AppLog.e("LIKES", "Cover download failed for ${t.id}", it) }.getOrNull()
+            AppLog.d("LIKES", "Liked: ${t.artist} - ${t.title} (cover ${if (cover != null) "saved" else "NOT saved"})")
             _likes.value = listOf(LikedTrack(t, cover, System.currentTimeMillis())) + _likes.value
             save()
         }
@@ -54,6 +55,7 @@ object LikesStore {
     suspend fun unlike(id: String) = withContext(Dispatchers.IO) {
         mutex.withLock {
             _likes.value.firstOrNull { it.track.id == id }?.coverPath?.let { File(it).delete() }
+            AppLog.d("LIKES", "Unliked: $id")
             _likes.value = _likes.value.filter { it.track.id != id }
             save()
         }

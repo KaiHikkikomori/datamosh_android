@@ -59,6 +59,8 @@ object RadioRepo {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val clients = AtomicInteger(0)
     private var job: Job? = null
+    private var lastTrackId: String? = null
+    private var failing = false
 
     @Synchronized
     fun acquire() {
@@ -104,6 +106,15 @@ object RadioRepo {
                 val next = j.optJSONObject("playing_next")?.optJSONObject("song")?.toTrack()
                 val remaining = np.optInt("remaining", 30)
 
+                if (failing) {
+                    failing = false
+                    AppLog.d("RADIO", "Now-playing API reachable again")
+                }
+                if (lastTrackId != now.track.id) {
+                    lastTrackId = now.track.id
+                    AppLog.d("RADIO", "Now playing: ${now.track.artist} - ${now.track.title} (${np.optInt("duration")}s)")
+                }
+
                 _state.value = RadioState(
                     now = now.track,
                     next = next,
@@ -117,6 +128,10 @@ object RadioRepo {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (!failing) {
+                    failing = true
+                    AppLog.e("RADIO", "Now-playing request failed", e)
+                }
                 _state.update { it.copy(error = true) }
                 wait = 5_000L
             }

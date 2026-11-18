@@ -39,23 +39,31 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                         _buffering.value = state == Player.STATE_BUFFERING
                     }
                 })
-            }
+                AppLog.d("PLAYER", "MediaController connected")
+            }.onFailure { AppLog.e("PLAYER", "MediaController connect failed", it) }
         }, ContextCompat.getMainExecutor(app))
     }
 
     fun toggle() {
-        val c = controller ?: return
+        val c = controller
+        if (c == null) {
+            AppLog.d("UI", "Play/pause tapped, but the player is not connected yet")
+            return
+        }
+        AppLog.d("UI", "Play/pause tapped, wasPlaying=${c.playWhenReady}")
         if (c.playWhenReady) c.pause() else c.play()
     }
 
     fun toggleLike(t: Track) {
         viewModelScope.launch {
             val liked = LikesStore.likes.value.any { it.track.id == t.id }
+            AppLog.d("UI", (if (liked) "Unlike" else "Like") + " tapped: ${t.artist} - ${t.title}")
             if (liked) LikesStore.unlike(t.id) else LikesStore.like(t)
         }
     }
 
     fun unlike(id: String) {
+        AppLog.d("UI", "Unlike tapped in likes list: $id")
         viewModelScope.launch { LikesStore.unlike(id) }
     }
 

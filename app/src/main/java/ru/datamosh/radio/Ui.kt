@@ -1,4 +1,4 @@
-@file:OptIn(UnstableApi::class)
+@file:OptIn(ExperimentalMaterial3Api::class)
 
 package ru.datamosh.radio
 
@@ -15,6 +15,14 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -98,7 +106,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import android.app.Activity
@@ -115,6 +122,28 @@ import androidx.compose.ui.res.painterResource
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.os.SystemClock
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
+import kotlin.random.Random
 import coil.compose.AsyncImage
 import java.io.File
 import kotlinx.coroutines.delay
@@ -173,6 +202,8 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
     val likedIds = remember(likes) { likes.map { it.track.id }.toSet() }
 
     var clean by rememberSaveable { mutableStateOf(false) }
+    var showMenu by rememberSaveable { mutableStateOf(false) }
+    var cleanLocked by rememberSaveable { mutableStateOf(false) }
     val view = LocalView.current
 
     // Clean screen: hide the status and navigation bars as well.
@@ -186,7 +217,10 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
         onDispose { ctrl?.show(WindowInsetsCompat.Type.systemBars()) }
     }
 
-    BackHandler(showLikes || clean) { if (clean) clean = false else showLikes = false }
+    BackHandler(showLikes || (clean && !cleanLocked)) {
+        AppLog.d("UI", "Back pressed (clean=$clean, likes=$showLikes)")
+        if (clean) clean = false else showLikes = false
+    }
 
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -196,15 +230,40 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
                     Brush.verticalGradient(listOf(Color(0x80000000), Color(0xCC000000))),
                 ),
             )
+            if (showMenu) MoreSheet { showMenu = false }
             AnimatedContent(
                 targetState = if (clean) 2 else if (showLikes) 1 else 0,
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
                 label = "tabs",
             ) { screen ->
                 if (screen == 2) {
-                    CleanScreen(state) { clean = false }
+                    CleanScreen(
+                        state = state,
+                        liked = state.now?.let { likedIds.contains(it.id) } == true,
+                        wantPlay = wantPlay,
+                        buffering = buffering,
+                        locked = cleanLocked,
+                        onToggle = vm::toggle,
+                        onLike = { state.now?.let(vm::toggleLike) },
+                        onToggleLock = {
+                            cleanLocked = !cleanLocked
+                            AppLog.d("UI", "Clean screen lock: $cleanLocked")
+                        },
+                        onExit = {
+                            AppLog.d("UI", "Exit clean screen")
+                            cleanLocked = false
+                            clean = false
+                        },
+                    )
                 } else if (screen == 1) {
-                    LikesScreen(likes, onBack = { showLikes = false }, onUnlike = vm::unlike)
+                    LikesScreen(
+                        likes,
+                        onBack = {
+                            AppLog.d("UI", "Close likes screen")
+                            showLikes = false
+                        },
+                        onUnlike = vm::unlike,
+                    )
                 } else {
                     PlayerScreen(
                         state = state,
@@ -214,8 +273,19 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
                         buffering = buffering,
                         onToggle = vm::toggle,
                         onLike = vm::toggleLike,
-                        onOpenLikes = { showLikes = true },
-                        onClean = { clean = true },
+                        onOpenLikes = {
+                            AppLog.d("UI", "Open likes screen")
+                            showLikes = true
+                        },
+                        onOpenMenu = {
+                            AppLog.d("UI", "Open menu")
+                            showMenu = true
+                        },
+                        onClean = {
+                            AppLog.d("UI", "Enter clean screen")
+                            cleanLocked = false
+                            clean = true
+                        },
                     )
                 }
             }
@@ -243,6 +313,11 @@ private fun VideoBackground() {
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
                 .build()
             setMediaItem(MediaItem.fromUri(src))
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    AppLog.e("BG", "Background video player error: ${error.errorCodeName}", error)
+                }
+            })
             prepare()
         }
     }
@@ -271,6 +346,54 @@ private fun VideoBackground() {
 }
 
 @Composable
+private fun TopBar(onOpenMenu: () -> Unit, onOpenLikes: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        FilledTonalIconButton(onClick = onOpenMenu) {
+            Icon(Icons.Rounded.MoreVert, contentDescription = "Меню")
+        }
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            Image(
+                painterResource(R.drawable.logo_fm),
+                contentDescription = "DATAMOSH FM",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.height(44.dp),
+            )
+        }
+        FilledTonalIconButton(onClick = onOpenLikes) {
+            Icon(Icons.Rounded.Favorite, contentDescription = "Понравившиеся треки")
+        }
+    }
+}
+
+private fun LazyListScope.historyItems(
+    state: RadioState,
+    likedIds: Set<String>,
+    onLike: (Track) -> Unit,
+    topPadding: Dp,
+) {
+    item {
+        Text(
+            "Недавно играло",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.fillMaxWidth().padding(top = topPadding),
+        )
+    }
+    items(state.history, key = { it.shId }) { h ->
+        TrackRow(h.track, null, likedIds.contains(h.track.id)) { onLike(h.track) }
+    }
+    if (state.history.isEmpty()) {
+        item {
+            Text(
+                "Список появится, когда доиграет первый трек",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
 private fun PlayerScreen(
     state: RadioState,
     likedIds: Set<String>,
@@ -280,64 +403,62 @@ private fun PlayerScreen(
     onToggle: () -> Unit,
     onLike: (Track) -> Unit,
     onOpenLikes: () -> Unit,
+    onOpenMenu: () -> Unit,
     onClean: () -> Unit,
 ) {
     val sys = WindowInsets.systemBars.asPaddingValues()
-    val uriHandler = LocalUriHandler.current
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 20.dp,
-            end = 20.dp,
-            top = sys.calculateTopPadding() + 8.dp,
-            bottom = sys.calculateBottomPadding() + 24.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                FilledTonalIconButton(onClick = { runCatching { uriHandler.openUri("https://t.me/datam0sh") } }) {
-                    Icon(
-                        painterResource(R.drawable.ic_telegram),
-                        contentDescription = "Telegram-канал",
-                        tint = Color.Unspecified,
-                        modifier = Modifier.size(24.dp),
-                    )
+    val wide = LocalConfiguration.current.screenWidthDp >= 600
+    val nowLiked = state.now?.let { likedIds.contains(it.id) } == true
+
+    if (wide) {
+        // Tablet / wide screen: player on the left, history on the right.
+        Column(
+            Modifier.fillMaxSize().padding(
+                start = 24.dp,
+                end = 24.dp,
+                top = sys.calculateTopPadding() + 8.dp,
+                bottom = sys.calculateBottomPadding() + 16.dp,
+            ),
+        ) {
+            TopBar(onOpenMenu, onOpenLikes)
+            Row(
+                Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
+                    val cover = minOf(maxWidth * 0.9f, maxHeight * 0.45f)
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        NowPlaying(state, nowLiked, wantPlay, buffering, onToggle, onLike, onClean, coverSize = cover)
+                    }
                 }
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Image(
-                        painterResource(R.drawable.logo_fm),
-                        contentDescription = "DATAMOSH FM",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.height(44.dp),
-                    )
-                }
-                FilledTonalIconButton(onClick = onOpenLikes) {
-                    Icon(Icons.Rounded.Favorite, contentDescription = "Понравившиеся треки")
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    contentPadding = PaddingValues(bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    historyItems(state, likedIds, onLike, 8.dp)
                 }
             }
         }
-        item { NowPlaying(state, state.now?.let { likedIds.contains(it.id) } == true, wantPlay, buffering, onToggle, onLike, onClean) }
-        item {
-            Text(
-                "Недавно играло",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
-            )
-        }
-        items(state.history, key = { it.shId }) { h ->
-            TrackRow(h.track, null, likedIds.contains(h.track.id)) { onLike(h.track) }
-        }
-        if (state.history.isEmpty()) {
-            item {
-                Text(
-                    "Список появится, когда доиграет первый трек",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = sys.calculateTopPadding() + 8.dp,
+                bottom = sys.calculateBottomPadding() + 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            item { TopBar(onOpenMenu, onOpenLikes) }
+            item { NowPlaying(state, nowLiked, wantPlay, buffering, onToggle, onLike, onClean) }
+            historyItems(state, likedIds, onLike, 20.dp)
         }
     }
 }
@@ -351,6 +472,7 @@ private fun NowPlaying(
     onToggle: () -> Unit,
     onLike: (Track) -> Unit,
     onClean: () -> Unit,
+    coverSize: Dp? = null,
 ) {
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -369,9 +491,7 @@ private fun NowPlaying(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth(0.82f)
-                .aspectRatio(1f)
+            modifier = (if (coverSize != null) Modifier.size(coverSize) else Modifier.fillMaxWidth(0.82f).aspectRatio(1f))
                 .clip(RoundedCornerShape(44.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
@@ -523,8 +643,9 @@ private fun TrackRow(
 @Composable
 private fun LikesScreen(likes: List<LikedTrack>, onBack: () -> Unit, onUnlike: (String) -> Unit) {
     val sys = WindowInsets.systemBars.asPaddingValues()
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.widthIn(max = 640.dp).fillMaxHeight(),
         contentPadding = PaddingValues(
             start = 20.dp,
             end = 20.dp,
@@ -559,31 +680,225 @@ private fun LikesScreen(likes: List<LikedTrack>, onBack: () -> Unit, onUnlike: (
             TrackRow(l.track, l.coverPath, liked = true, extra = { SearchMenu(l.track) }) { onUnlike(l.track.id) }
         }
     }
+    }
 }
 
+private class FlyingHeart(
+    val id: Long,
+    val x: Float,
+    val y: Float,
+    val dx: Float,
+    val size: Dp,
+    val delayMs: Int,
+)
+
 @Composable
-private fun CleanScreen(state: RadioState, onExit: () -> Unit) {
-    Box(
+private fun FlyingHeartView(h: FlyingHeart, onDone: () -> Unit) {
+    val progress = remember { Animatable(0f) }
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(h.delayMs.toLong())
+        started = true
+        progress.animateTo(1f, tween(1400, easing = LinearOutSlowInEasing))
+        onDone()
+    }
+    Icon(
+        Icons.Rounded.Favorite,
+        contentDescription = null,
+        tint = Color.White,
+        modifier = Modifier
+            .offset {
+                val p = progress.value
+                IntOffset(
+                    (h.x + h.dx * p - h.size.toPx() / 2f).roundToInt(),
+                    (h.y - 240.dp.toPx() * p - h.size.toPx() / 2f).roundToInt(),
+                )
+            }
+            .size(h.size)
+            .graphicsLayer {
+                val p = progress.value
+                alpha = if (started) (1f - p * p).coerceIn(0f, 1f) else 0f
+                val sc = (0.5f + p * 4f).coerceAtMost(1f)
+                scaleX = sc
+                scaleY = sc
+            },
+    )
+}
+
+/**
+ * Clean screen: video background, cover, title and artist.
+ *  - tap the cover: a small play/pause button appears for a few seconds;
+ *  - double tap the cover: like the track (with flying hearts);
+ *  - lock button on the right (5 s): fixes the mode so taps on the background don't close it.
+ */
+@Composable
+private fun CleanScreen(
+    state: RadioState,
+    liked: Boolean,
+    wantPlay: Boolean,
+    buffering: Boolean,
+    locked: Boolean,
+    onToggle: () -> Unit,
+    onLike: () -> Unit,
+    onToggleLock: () -> Unit,
+    onExit: () -> Unit,
+) {
+    val likedNow by rememberUpdatedState(liked)
+    val onLikeNow by rememberUpdatedState(onLike)
+
+    // Lock button: visible for 5 s after entering and after every lock/unlock.
+    // While locked, a tap on the background (or Back) shows it again.
+    var lockTick by remember { mutableIntStateOf(0) }
+    var lockVisible by remember { mutableStateOf(true) }
+    val lockAlpha by animateFloatAsState(if (lockVisible) 1f else 0f, tween(250), label = "lock")
+    LaunchedEffect(lockTick, locked) {
+        lockVisible = true
+        delay(5_000)
+        lockVisible = false
+    }
+
+    // Play/pause button on the cover: visible for 3 s after a tap.
+    var controlsTick by remember { mutableIntStateOf(0) }
+    var controlsVisible by remember { mutableStateOf(false) }
+    val controlsAlpha by animateFloatAsState(if (controlsVisible) 1f else 0f, tween(200), label = "controls")
+    LaunchedEffect(controlsTick) {
+        if (controlsTick > 0) {
+            controlsVisible = true
+            delay(3_000)
+            controlsVisible = false
+        }
+    }
+
+    BackHandler(enabled = locked) {
+        AppLog.d("UI", "Back pressed while the clean screen is locked")
+        lockTick++
+    }
+
+    val hearts = remember { mutableStateListOf<FlyingHeart>() }
+
+    BoxWithConstraints(
         modifier = Modifier.fillMaxSize().clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
-        ) { onExit() },
-        contentAlignment = Alignment.Center,
+        ) { if (locked) lockTick++ else onExit() },
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth(0.82f)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(44.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        val side = minOf(maxWidth * 0.82f, maxHeight * 0.6f)
+        val textMaxWidth = maxWidth * 0.9f
+
+        Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            AsyncImage(
-                model = state.now?.art,
-                contentDescription = "Обложка",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+            Box(Modifier.size(side)) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(44.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { controlsTick++ },
+                                onDoubleTap = { off ->
+                                    AppLog.d("UI", "Clean screen: double tap (like)")
+                                    if (!likedNow) onLikeNow()
+                                    repeat(7) {
+                                        hearts.add(
+                                            FlyingHeart(
+                                                id = Random.nextLong(),
+                                                x = off.x,
+                                                y = off.y,
+                                                dx = (Random.nextFloat() - 0.5f) * 140.dp.toPx(),
+                                                size = (18 + Random.nextInt(18)).dp,
+                                                delayMs = Random.nextInt(0, 260),
+                                            ),
+                                        )
+                                    }
+                                },
+                            )
+                        },
+                ) {
+                    AsyncImage(
+                        model = state.now?.art,
+                        contentDescription = "Обложка",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    if (controlsAlpha > 0.01f) {
+                        FilledIconButton(
+                            onClick = {
+                                AppLog.d("UI", "Clean screen: play/pause button")
+                                onToggle()
+                                controlsTick++
+                            },
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(60.dp)
+                                .graphicsLayer { alpha = controlsAlpha },
+                        ) {
+                            if (wantPlay && buffering) {
+                                CircularProgressIndicator(
+                                    Modifier.size(30.dp),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            } else {
+                                Icon(
+                                    if (wantPlay) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (wantPlay) "Пауза" else "Слушать",
+                                    modifier = Modifier.size(32.dp),
+                                )
+                            }
+                        }
+                    }
+                    if (lockAlpha > 0.01f) {
+                        FilledTonalIconButton(
+                            onClick = onToggleLock,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .offset(y = 62.dp)
+                                .graphicsLayer { alpha = lockAlpha },
+                        ) {
+                            Icon(
+                                if (locked) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
+                                contentDescription = if (locked) "Разблокировать чистый экран" else "Зафиксировать чистый экран",
+                            )
+                        }
+                    }
+                }
+                for (h in hearts.toList()) {
+                    key(h.id) { FlyingHeartView(h) { hearts.remove(h) } }
+                }
+            }
+
+            AnimatedContent(
+                targetState = state.now,
+                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                label = "cleanMeta",
+            ) { t ->
+                Column(
+                    modifier = Modifier.widthIn(max = textMaxWidth),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        t?.title ?: "",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        t?.artist ?: "",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
+
     }
 }
 
@@ -611,10 +926,100 @@ private fun SearchMenu(track: Track) {
                     text = { Text(name) },
                     onClick = {
                         open = false
+                        AppLog.d("UI", "Search '${track.artist} - ${track.title}' in $name")
                         runCatching { uriHandler.openUri(url + query) }
+                            .onFailure { AppLog.e("UI", "Failed to open $name", it) }
                     },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun MoreSheet(onDismiss: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var taps by remember { mutableIntStateOf(0) }
+    var lastTap by remember { mutableLongStateOf(0L) }
+
+    fun openLink(url: String, what: String) {
+        AppLog.d("UI", "Open link: $what")
+        runCatching { uriHandler.openUri(url) }
+            .onFailure { AppLog.e("UI", "Failed to open $url", it) }
+        onDismiss()
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF2B2B30),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            MenuRow(
+                text = "Официальный ТГ-канал DATAMOSH",
+                icon = {
+                    Icon(
+                        painterResource(R.drawable.ic_telegram),
+                        contentDescription = null,
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(22.dp),
+                    )
+                },
+            ) { openLink("https://t.me/datam0sh", "telegram channel") }
+
+            MenuRow(
+                text = "Обратная связь",
+                icon = { Text("?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+            ) { openLink("https://t.me/datafmsupport_bot", "feedback bot") }
+
+            // Hidden switch: tap 3 times, then long-press once -> toggles debug logging.
+            Text(
+                "Версия приложения ${AppLog.versionName()} ($BUILD_DATE)",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 14.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                val now = SystemClock.elapsedRealtime()
+                                taps = if (now - lastTap > 3_000) 1 else taps + 1
+                                lastTap = now
+                            },
+                            onLongPress = {
+                                val now = SystemClock.elapsedRealtime()
+                                if (taps == 3 && now - lastTap <= 4_000) AppLog.toggleDebug()
+                                taps = 0
+                            },
+                        )
+                    },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(text: String, icon: @Composable () -> Unit, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(24.dp),
+        color = Color.White.copy(alpha = 0.08f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) { icon() }
+            Spacer(Modifier.width(14.dp))
+            Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
         }
     }
 }

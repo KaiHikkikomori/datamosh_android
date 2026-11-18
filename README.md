@@ -2,7 +2,7 @@
 
 # DATAMOSH FM
 
-**Android-плеер для интернет-радио DATAMOSH**
+**Неофициальный Android-плеер для интернет-радио DATAMOSH**
 
 Живой эфир, обложки, лайки и анимированный фон. Всё в одном лёгком приложении.
 
@@ -11,7 +11,7 @@
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?logo=jetpackcompose&logoColor=white)
 ![Media3](https://img.shields.io/badge/Media3-ExoPlayer-FF5C9A)
 
-[![Скачать APK](https://img.shields.io/github/v/release/hxlderpng/datamosh_android?label=Скачать%20APK&logo=android&logoColor=white&color=3DDC84&style=for-the-badge)](https://github.com/hxlderpng/datamosh_android/releases/latest)
+[![Скачать APK](https://img.shields.io/github/v/release/KaiHikkikomori/datamosh_android?label=Скачать%20APK&logo=android&logoColor=white&color=3DDC84&style=for-the-badge)](https://github.com/KaiHikkikomori/datamosh_android/releases/latest)
 
 [Установка](#-установка) •
 [Возможности](#-возможности) •
@@ -27,7 +27,7 @@
 
 Собирать проект самому не нужно: готовый APK лежит в релизах.
 
-1. Открой страницу [**Releases**](https://github.com/kaihikkikomori/datamosh_android/releases/latest) и скачай файл `.apk` из блока **Assets** последней версии.
+1. Открой страницу [**Releases**](https://github.com/KaiHikkikomori/datamosh_android/releases/latest) и скачай файл `.apk` из блока **Assets** последней версии.
 2. Открой скачанный файл на телефоне. Если Android спросит разрешение на установку из неизвестных источников, разреши его для браузера или файлового менеджера, через которые скачал APK.
 3. Если Google Play Protect покажет предупреждение, выбери **«Всё равно установить»**. Так бывает с любыми приложениями вне магазина.
 4. Запусти **DATAMOSH FM**. На Android 13 и новее разреши уведомления, иначе управление плеером в шторке не появится.
@@ -76,7 +76,7 @@
 ### Шаги
 1. Склонируй репозиторий или скачай архив:
    ```bash
-   git clone https://github.com/hxlderpng/datamosh_android.git
+   git clone https://github.com/KaiHikkikomori/datamosh_android.git
    ```
 2. В Android Studio: **File → Open** и выбери папку проекта (где лежит `settings.gradle.kts`).
 3. Дождись **Gradle Sync**. В первый раз это занимает несколько минут.
@@ -85,6 +85,16 @@
 5. Готовый `app-debug.apk` лежит в `app/build/outputs/apk/debug/`.
 
 > **Про подпись.** Отладочный APK подписывается ключом Android Studio. Чтобы обновления ставились поверх без потери лайков, собирай приложение на одном компьютере или используй собственный ключ: **Build → Generate Signed App Bundle or APK**.
+
+## 🐞 Ошибки, логи и отладка
+
+Если что-то работает не так, приложение умеет записывать логи в стандартную папку **Download** на телефоне.
+
+- **Отчёты о крашах** пишутся всегда, автоматически: файл `DATAMOSH_FM_crash_<дата>_<время>.txt` с описанием ошибки, версией приложения и устройством.
+- **Подробный лог действий** по умолчанию выключен. Чтобы включить его, открой меню (три точки в левом верхнем углу) и на надписи «Версия приложения» **нажми три раза, затем один раз зажми**. Появится уведомление «Отладка включена». С этого момента при каждом запуске приложения в Download создаётся файл `DATAMOSH_FM_log_<дата>_<время>.txt` с действиями пользователя и событиями внутри приложения (плеер, загрузка треков и обложек, лайки, ошибки сети).
+- Чтобы выключить отладку, повтори тот же жест: три нажатия и одно удержание. Появится уведомление «Отладка отключена».
+
+Если сообщаешь о проблеме, прикрепи файл из папки Download. В обратной связи (меню → «Обратная связь») его можно отправить в чат с ботом.
 
 ## 🧰 Технологии
 
@@ -113,6 +123,14 @@ app/src/main/
     └── layout/bg_player.xml   # видео-фон (TextureView, обрезка по центру)
 
 ```
+
+## 📜 Права и авторство
+
+Название, логотипы, радиопоток и видео принадлежат их владельцам (DATAMOSH).
+
+Автор идеи, дизайна и бета-тестер: [KaiHikkikomori](https://github.com/KaiHikkikomori)
+Код написан при участии [Claude](https://claude.ai) (Anthropic).
+
 ---
 
 <div align="center">

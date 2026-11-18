@@ -10,7 +10,10 @@ import kotlinx.coroutines.withContext
 /** Downloads the background video once into filesDir and reuses it on later launches. */
 suspend fun ensureBackground(ctx: Context): File? = withContext(Dispatchers.IO) {
     val target = File(ctx.filesDir, "bg.webm")
-    if (target.exists() && target.length() > 0) return@withContext target
+    if (target.exists() && target.length() > 0) {
+        AppLog.d("BG", "Using cached background video (${target.length()} bytes)")
+        return@withContext target
+    }
 
     val part = File(ctx.filesDir, "bg.webm.part")
     runCatching {
@@ -27,7 +30,8 @@ suspend fun ensureBackground(ctx: Context): File? = withContext(Dispatchers.IO) 
         }
         check(part.length() > 0)
         part.renameTo(target)
-    }
+        AppLog.d("BG", "Background video downloaded: ${target.length()} bytes")
+    }.onFailure { AppLog.e("BG", "Background video download failed", it) }
     part.delete()
     target.takeIf { it.exists() && it.length() > 0 }
 }
