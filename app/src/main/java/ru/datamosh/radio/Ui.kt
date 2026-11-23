@@ -22,6 +22,10 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -407,10 +411,45 @@ private fun PlayerScreen(
     onClean: () -> Unit,
 ) {
     val sys = WindowInsets.systemBars.asPaddingValues()
-    val wide = LocalConfiguration.current.screenWidthDp >= 600
+    val config = LocalConfiguration.current
+    val wide = config.screenWidthDp >= 600
+    val landscape = config.screenWidthDp > config.screenHeightDp
     val nowLiked = state.now?.let { likedIds.contains(it.id) } == true
 
-    if (wide) {
+    if (wide && landscape) {
+        // Landscape: a large cover fills the left half; the controls sit on top of the right
+        // half with the history below them, and the whole right column scrolls together.
+        val dir = LocalLayoutDirection.current
+        val safe = WindowInsets.safeDrawing.asPaddingValues()
+        Column(
+            Modifier.fillMaxSize().padding(
+                start = safe.calculateStartPadding(dir) + 24.dp,
+                end = safe.calculateEndPadding(dir) + 24.dp,
+                top = sys.calculateTopPadding() + 8.dp,
+                bottom = sys.calculateBottomPadding() + 16.dp,
+            ),
+        ) {
+            TopBar(onOpenMenu, onOpenLikes)
+            Row(
+                Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                    Cover(state.now?.art, Modifier.size(minOf(maxWidth, maxHeight)))
+                }
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    contentPadding = PaddingValues(bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    item {
+                        NowPlayingControls(state, nowLiked, wantPlay, buffering, onToggle, onLike, onClean)
+                    }
+                    historyItems(state, likedIds, onLike, 20.dp)
+                }
+            }
+        }
+    } else if (wide) {
         // Tablet / wide screen: player on the left, history on the right.
         Column(
             Modifier.fillMaxSize().padding(
@@ -474,6 +513,55 @@ private fun NowPlaying(
     onClean: () -> Unit,
     coverSize: Dp? = null,
 ) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Cover(
+            state.now?.art,
+            if (coverSize != null) Modifier.size(coverSize) else Modifier.fillMaxWidth(0.82f).aspectRatio(1f),
+        )
+        NowPlayingControls(state, liked, wantPlay, buffering, onToggle, onLike, onClean)
+    }
+}
+
+@Composable
+private fun Cover(art: String?, modifier: Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(44.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        contentAlignment = Alignment.Center,
+    ) {
+        Crossfade(targetState = art, label = "cover") { url ->
+            if (url.isNullOrBlank()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(64.dp))
+                }
+            } else {
+                AsyncImage(
+                    model = url,
+                    contentDescription = "Обложка",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+}
+
+/** Title, artist, progress, playback buttons and the "next" line (everything except the cover). */
+@Composable
+private fun NowPlayingControls(
+    state: RadioState,
+    liked: Boolean,
+    wantPlay: Boolean,
+    buffering: Boolean,
+    onToggle: () -> Unit,
+    onLike: (Track) -> Unit,
+    onClean: () -> Unit,
+) {
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -486,32 +574,10 @@ private fun NowPlaying(
     } else 0f
 
     Column(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Box(
-            modifier = (if (coverSize != null) Modifier.size(coverSize) else Modifier.fillMaxWidth(0.82f).aspectRatio(1f))
-                .clip(RoundedCornerShape(44.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            contentAlignment = Alignment.Center,
-        ) {
-            Crossfade(targetState = state.now?.art, label = "cover") { art ->
-                if (art.isNullOrBlank()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(64.dp))
-                    }
-                } else {
-                    AsyncImage(
-                        model = art,
-                        contentDescription = "Обложка",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            }
-        }
-
         AnimatedContent(
             targetState = state.now,
             transitionSpec = { fadeIn() togetherWith fadeOut() },
