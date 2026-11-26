@@ -144,6 +144,31 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import kotlin.random.Random
+import android.app.WallpaperManager
+import android.content.ComponentName
+import android.content.Intent
+import android.widget.Toast
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.Image as ImageIcon
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Button
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.material.icons.rounded.MusicOff
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.runtime.mutableFloatStateOf
 import coil.compose.AsyncImage
 import java.io.File
 import kotlinx.coroutines.delay
@@ -198,12 +223,18 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
     val likes by LikesStore.likes.collectAsStateWithLifecycle()
     val wantPlay by vm.wantPlay.collectAsStateWithLifecycle()
     val buffering by vm.buffering.collectAsStateWithLifecycle()
+    val hideMore by vm.hideMore.collectAsStateWithLifecycle()
+    val hideRecent by vm.hideRecent.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
+    val delaySeconds by vm.delaySeconds.collectAsStateWithLifecycle()
+    val uriHandler = LocalUriHandler.current
     var showLikes by rememberSaveable { mutableStateOf(false) }
     val likedIds = remember(likes) { likes.map { it.track.id }.toSet() }
 
     var clean by rememberSaveable { mutableStateOf(false) }
     var showMenu by rememberSaveable { mutableStateOf(false) }
     var cleanLocked by rememberSaveable { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     val view = LocalView.current
 
     // Clean screen: hide the status and navigation bars as well.
@@ -217,9 +248,9 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
         onDispose { ctrl?.show(WindowInsetsCompat.Type.systemBars()) }
     }
 
-    BackHandler(showLikes || (clean && !cleanLocked)) {
-        AppLog.d("UI", "Back pressed (clean=$clean, likes=$showLikes)")
-        if (clean) clean = false else showLikes = false
+    BackHandler(showLikes || showSettings || (clean && !cleanLocked)) {
+        AppLog.d("UI", "Back pressed (clean=$clean, likes=$showLikes, settings=$showSettings)")
+        if (clean) clean = false else if (showSettings) showSettings = false else showLikes = false
     }
 
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
@@ -230,9 +261,32 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
                     Brush.verticalGradient(listOf(Color(0x80000000), Color(0xCC000000))),
                 ),
             )
-            if (showMenu) MoreSheet { showMenu = false }
+            update?.let { ui ->
+                UpdateDialog(
+                    ui = ui,
+                    onInstall = {
+                        if (ui is UpdateUi.Available) {
+                            AppLog.d("UPDATE", "Install tapped: ${ui.info.name}")
+                            runCatching { uriHandler.openUri(ui.info.url) }
+                                .onFailure { AppLog.e("UPDATE", "Failed to open ${ui.info.url}", it) }
+                        }
+                        vm.dismissUpdate()
+                    },
+                    onLater = vm::remindLater,
+                    onSkip = vm::skipVersion,
+                    onDismiss = vm::dismissUpdate,
+                )
+            }
+            if (showMenu) {
+                MoreSheet(
+                    onOpenSettings = {
+                        showMenu = false
+                        showSettings = true
+                    },
+                ) { showMenu = false }
+            }
             AnimatedContent(
-                targetState = if (clean) 2 else if (showLikes) 1 else 0,
+                targetState = if (clean) 2 else if (showLikes) 1 else if (showSettings) 3 else 0,
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
                 label = "tabs",
             ) { screen ->
@@ -255,6 +309,20 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
                             clean = false
                         },
                     )
+                } else if (screen == 3) {
+                    SettingsScreen(
+                        likes = likes,
+                        hideMore = hideMore,
+                        hideRecent = hideRecent,
+                        onHideMore = vm::setHideMore,
+                        onHideRecent = vm::setHideRecent,
+                        onCheckUpdates = vm::checkManually,
+                        delaySeconds = delaySeconds,
+                        onDelay = vm::setDelay,
+                    ) {
+                        AppLog.d("UI", "Close settings screen")
+                        showSettings = false
+                    }
                 } else if (screen == 1) {
                     LikesScreen(
                         likes,
@@ -273,6 +341,8 @@ private fun RadioContent(vm: RadioViewModel, state: RadioState) {
                         buffering = buffering,
                         onToggle = vm::toggle,
                         onLike = vm::toggleLike,
+                        hideMore = hideMore,
+                        hideRecent = hideRecent,
                         onOpenLikes = {
                             AppLog.d("UI", "Open likes screen")
                             showLikes = true
@@ -371,14 +441,7 @@ private fun LazyListScope.historyItems(
     onLike: (Track) -> Unit,
     topPadding: Dp,
 ) {
-    item {
-        Text(
-            "Недавно играло",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.fillMaxWidth().padding(top = topPadding),
-        )
-    }
+    item { SectionHeader("Недавно играло", topPadding) }
     items(state.history, key = { it.shId }) { h ->
         TrackRow(h.track, null, likedIds.contains(h.track.id)) { onLike(h.track) }
     }
@@ -402,6 +465,8 @@ private fun PlayerScreen(
     buffering: Boolean,
     onToggle: () -> Unit,
     onLike: (Track) -> Unit,
+    hideMore: Boolean,
+    hideRecent: Boolean,
     onOpenLikes: () -> Unit,
     onOpenMenu: () -> Unit,
     onClean: () -> Unit,
@@ -411,40 +476,98 @@ private fun PlayerScreen(
     val nowLiked = state.now?.let { likedIds.contains(it.id) } == true
 
     if (wide) {
-        // Tablet / wide screen: player on the left, history on the right.
+        // Wide screen / landscape: cover on the left, player controls on the right.
+        // The "queue" button swaps the cover for the recent tracks and "More from DATAMOSH".
+        var showQueue by rememberSaveable { mutableStateOf(false) }
+        val queueAvailable = !hideRecent || !hideMore
+        val queueOpen = showQueue && queueAvailable
+
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.fillMaxSize().padding(
+                    start = 24.dp,
+                    end = 24.dp,
+                    top = sys.calculateTopPadding() + 8.dp,
+                    bottom = sys.calculateBottomPadding() + 16.dp,
+                ),
+            ) {
+                TopBar(onOpenMenu, onOpenLikes)
+                Row(
+                    Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                ) {
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        if (queueOpen) {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(bottom = 64.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                if (!hideRecent) historyItems(state, likedIds, onLike, 0.dp)
+                                if (!hideMore) moreItems(if (hideRecent) 0.dp else 20.dp)
+                            }
+                        } else {
+                            BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CoverArt(state.now?.art, Modifier.size(minOf(maxWidth, maxHeight) * 0.92f))
+                            }
+                        }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .verticalScroll(rememberScrollState())
+                            .padding(bottom = if (queueAvailable) 56.dp else 0.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        NowPlaying(
+                            state, nowLiked, wantPlay, buffering, onToggle, onLike, onClean,
+                            showCover = false,
+                        )
+                    }
+                }
+            }
+
+            if (queueAvailable) {
+                FilledTonalIconToggleButton(
+                    checked = queueOpen,
+                    onCheckedChange = {
+                        AppLog.d("UI", "Queue button: show=$it")
+                        showQueue = it
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 24.dp, bottom = sys.calculateBottomPadding() + 16.dp),
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = "Очередь")
+                }
+            }
+        }
+    } else if (hideRecent && hideMore) {
+        // Everything below the player is hidden: the player is centred on the screen.
         Column(
             Modifier.fillMaxSize().padding(
-                start = 24.dp,
-                end = 24.dp,
+                start = 20.dp,
+                end = 20.dp,
                 top = sys.calculateTopPadding() + 8.dp,
                 bottom = sys.calculateBottomPadding() + 16.dp,
             ),
         ) {
             TopBar(onOpenMenu, onOpenLikes)
-            Row(
-                Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(24.dp),
-            ) {
-                BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
-                    val cover = minOf(maxWidth * 0.9f, maxHeight * 0.45f)
-                    Column(
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        NowPlaying(state, nowLiked, wantPlay, buffering, onToggle, onLike, onClean, coverSize = cover)
-                    }
-                }
-                LazyColumn(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    contentPadding = PaddingValues(bottom = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val cover = minOf(maxWidth * 0.82f, maxHeight * 0.55f)
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
                 ) {
-                    historyItems(state, likedIds, onLike, 8.dp)
+                    NowPlaying(state, nowLiked, wantPlay, buffering, onToggle, onLike, onClean, coverSize = cover)
                 }
             }
         }
     } else {
+        // Phone, portrait: the page scrolls, the cover keeps its normal size.
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
@@ -458,7 +581,33 @@ private fun PlayerScreen(
         ) {
             item { TopBar(onOpenMenu, onOpenLikes) }
             item { NowPlaying(state, nowLiked, wantPlay, buffering, onToggle, onLike, onClean) }
-            historyItems(state, likedIds, onLike, 20.dp)
+            if (!hideRecent) historyItems(state, likedIds, onLike, 20.dp)
+            if (!hideMore) moreItems(20.dp)
+        }
+    }
+}
+
+@Composable
+private fun CoverArt(art: String?, modifier: Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(44.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        contentAlignment = Alignment.Center,
+    ) {
+        Crossfade(targetState = art, label = "cover") { a ->
+            if (a.isNullOrBlank()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(64.dp))
+                }
+            } else {
+                AsyncImage(
+                    model = a,
+                    contentDescription = "Обложка",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
@@ -473,6 +622,7 @@ private fun NowPlaying(
     onLike: (Track) -> Unit,
     onClean: () -> Unit,
     coverSize: Dp? = null,
+    showCover: Boolean = true,
 ) {
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -490,26 +640,11 @@ private fun NowPlaying(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Box(
-            modifier = (if (coverSize != null) Modifier.size(coverSize) else Modifier.fillMaxWidth(0.82f).aspectRatio(1f))
-                .clip(RoundedCornerShape(44.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            contentAlignment = Alignment.Center,
-        ) {
-            Crossfade(targetState = state.now?.art, label = "cover") { art ->
-                if (art.isNullOrBlank()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(64.dp))
-                    }
-                } else {
-                    AsyncImage(
-                        model = art,
-                        contentDescription = "Обложка",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            }
+        if (showCover) {
+            CoverArt(
+                state.now?.art,
+                if (coverSize != null) Modifier.size(coverSize) else Modifier.fillMaxWidth(0.82f).aspectRatio(1f),
+            )
         }
 
         AnimatedContent(
@@ -571,6 +706,13 @@ private fun NowPlaying(
                 checked = liked,
                 onCheckedChange = { state.now?.let(onLike) },
                 modifier = Modifier.size(56.dp),
+                // Same container in both states: only the icon (outline -> filled heart) changes.
+                colors = IconButtonDefaults.filledTonalIconToggleButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    checkedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    checkedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
             ) {
                 Icon(
                     if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
@@ -729,7 +871,7 @@ private fun FlyingHeartView(h: FlyingHeart, onDone: () -> Unit) {
  * Clean screen: video background, cover, title and artist.
  *  - tap the cover: a small play/pause button appears for a few seconds;
  *  - double tap the cover: like the track (with flying hearts);
- *  - lock button on the right (5 s): fixes the mode so taps on the background don't close it.
+ *  - lock button under play/pause (2.5 s): fixes the mode so taps on the background don't close it.
  */
 @Composable
 private fun CleanScreen(
@@ -746,14 +888,14 @@ private fun CleanScreen(
     val likedNow by rememberUpdatedState(liked)
     val onLikeNow by rememberUpdatedState(onLike)
 
-    // Lock button: visible for 5 s after entering and after every lock/unlock.
+    // Lock button: visible for 2.5 s after entering, after every lock/unlock and after a tap on the cover.
     // While locked, a tap on the background (or Back) shows it again.
     var lockTick by remember { mutableIntStateOf(0) }
     var lockVisible by remember { mutableStateOf(true) }
     val lockAlpha by animateFloatAsState(if (lockVisible) 1f else 0f, tween(250), label = "lock")
     LaunchedEffect(lockTick, locked) {
         lockVisible = true
-        delay(5_000)
+        delay(2_500)
         lockVisible = false
     }
 
@@ -798,7 +940,10 @@ private fun CleanScreen(
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .pointerInput(Unit) {
                             detectTapGestures(
-                                onTap = { controlsTick++ },
+                                onTap = {
+                                    controlsTick++
+                                    lockTick++
+                                },
                                 onDoubleTap = { off ->
                                     AppLog.d("UI", "Clean screen: double tap (like)")
                                     if (!likedNow) onLikeNow()
@@ -830,6 +975,7 @@ private fun CleanScreen(
                                 AppLog.d("UI", "Clean screen: play/pause button")
                                 onToggle()
                                 controlsTick++
+                                lockTick++
                             },
                             modifier = Modifier
                                 .align(Alignment.Center)
@@ -851,7 +997,7 @@ private fun CleanScreen(
                         }
                     }
                     if (lockAlpha > 0.01f) {
-                        FilledTonalIconButton(
+                        FilledIconButton(
                             onClick = onToggleLock,
                             modifier = Modifier
                                 .align(Alignment.Center)
@@ -937,7 +1083,7 @@ private fun SearchMenu(track: Track) {
 }
 
 @Composable
-private fun MoreSheet(onDismiss: () -> Unit) {
+private fun MoreSheet(onOpenSettings: () -> Unit, onDismiss: () -> Unit) {
     val uriHandler = LocalUriHandler.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var taps by remember { mutableIntStateOf(0) }
@@ -976,6 +1122,14 @@ private fun MoreSheet(onDismiss: () -> Unit) {
                 text = "Обратная связь",
                 icon = { Text("?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
             ) { openLink("https://t.me/datafmsupport_bot", "feedback bot") }
+
+            MenuRow(
+                text = "Дополнительные настройки",
+                icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
+            ) {
+                AppLog.d("UI", "Open settings screen")
+                onOpenSettings()
+            }
 
             // Hidden switch: tap 3 times, then long-press once -> toggles debug logging.
             Text(
@@ -1020,6 +1174,439 @@ private fun MenuRow(text: String, icon: @Composable () -> Unit, onClick: () -> U
             ) { icon() }
             Spacer(Modifier.width(14.dp))
             Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+private fun LazyListScope.moreItems(topPadding: Dp) {
+    item { MoreSection(topPadding) }
+}
+
+@Composable
+private fun SectionHeader(text: String, topPadding: Dp) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.fillMaxWidth().padding(top = topPadding),
+    )
+}
+
+@Composable
+private fun MoreSection(topPadding: Dp) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionHeader("Ещё от DATAMOSH", topPadding)
+        MoreRow()
+    }
+}
+
+@Composable
+private fun MoreRow() {
+    val uriHandler = LocalUriHandler.current
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(moreFromDatamosh) { item ->
+            MoreCard(item) {
+                AppLog.d("UI", "Open link: ${item.title}")
+                runCatching { uriHandler.openUri(item.url) }
+                    .onFailure { AppLog.e("UI", "Failed to open ${item.url}", it) }
+            }
+        }
+    }
+}
+
+/** Card with a 2:3 ratio: a square cover (2x2) and the title in the remaining strip. */
+@Composable
+private fun MoreCard(item: MoreItem, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+        modifier = Modifier.width(140.dp).aspectRatio(2f / 3f),
+    ) {
+        Column {
+            Image(
+                painterResource(item.cover),
+                contentDescription = item.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+            )
+            Box(
+                Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    item.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    likes: List<LikedTrack>,
+    hideMore: Boolean,
+    hideRecent: Boolean,
+    onHideMore: (Boolean) -> Unit,
+    onHideRecent: (Boolean) -> Unit,
+    onCheckUpdates: () -> Unit,
+    delaySeconds: Float,
+    onDelay: (Float) -> Unit,
+    onBack: () -> Unit,
+) {
+    val sys = WindowInsets.systemBars.asPaddingValues()
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showExport by remember { mutableStateOf(false) }
+    var showDelay by remember { mutableStateOf(false) }
+
+    fun toast(text: String) = Toast.makeText(ctx, text, Toast.LENGTH_LONG).show()
+
+    if (showExport) {
+        ExportSheet(
+            onDismiss = { showExport = false },
+            onSave = {
+                showExport = false
+                scope.launch {
+                    if (likes.isEmpty()) {
+                        AppLog.d("EXPORT", "Nothing to export, the likes list is empty")
+                        toast("Список лайкнутых треков пуст")
+                    } else {
+                        val text = likes.joinToString("\n") { "${it.track.artist} - ${it.track.title}" }
+                        val ok = withContext(Dispatchers.IO) { Downloads.saveText(ctx, "Datamosh_likes.txt", text) }
+                        AppLog.d("EXPORT", "Export of ${likes.size} tracks, success=$ok")
+                        toast(if (ok) "Сохранено: Download/Datamosh_likes.txt" else "Не удалось сохранить файл")
+                    }
+                }
+            },
+        )
+    }
+
+    if (showDelay) {
+        DelaySheet(
+            initial = delaySeconds,
+            onDismiss = { showDelay = false },
+            onOk = {
+                onDelay(it)
+                showDelay = false
+            },
+        )
+    }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(
+            modifier = Modifier.widthIn(max = 640.dp).fillMaxHeight(),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                top = sys.calculateTopPadding() + 8.dp,
+                bottom = sys.calculateBottomPadding() + 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Назад")
+                    }
+                    Text(
+                        "Дополнительные настройки",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+            }
+            item {
+                SettingsRow(Icons.Rounded.FileDownload, "Экспорт лайкнутых треков") {
+                    AppLog.d("UI", "Open export dialog")
+                    showExport = true
+                }
+            }
+            item {
+                SettingsRow(Icons.Rounded.Schedule, "Регулировка задержки") {
+                    AppLog.d("UI", "Open delay dialog")
+                    showDelay = true
+                }
+            }
+            item {
+                SettingsRow(Icons.Rounded.ImageIcon, "Живые обои DatamoshFM") {
+                    AppLog.d("UI", "Live wallpaper requested")
+                    scope.launch {
+                        // Make sure the background video is stored locally, then ask Android to apply it.
+                        val file = ensureBackground(ctx)
+                        if (file == null) {
+                            toast("Не удалось сохранить фон. Проверь интернет и попробуй ещё раз")
+                        } else {
+                            val component = ComponentName(ctx, VideoWallpaperService::class.java)
+                            val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
+                                .putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
+                            runCatching { ctx.startActivity(intent) }.onFailure {
+                                AppLog.e("UI", "Direct wallpaper request failed, opening the chooser", it)
+                                runCatching {
+                                    ctx.startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER))
+                                }.onFailure { e ->
+                                    AppLog.e("UI", "Wallpaper chooser failed", e)
+                                    toast("На этом устройстве нельзя установить живые обои")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                ToggleRow(
+                    icon = { Icon(Icons.Rounded.MusicOff, contentDescription = null) },
+                    text = "Скрыть «Ещё от DATAMOSH»",
+                    checked = hideMore,
+                    onChange = onHideMore,
+                )
+            }
+            item {
+                ToggleRow(
+                    icon = { CrossedIcon(Icons.AutoMirrored.Rounded.QueueMusic) },
+                    text = "Скрыть недавние треки",
+                    checked = hideRecent,
+                    onChange = onHideRecent,
+                )
+            }
+            item {
+                SettingsRow(Icons.Rounded.FileDownload, "Проверить обновление") {
+                    AppLog.d("UI", "Check for updates tapped")
+                    onCheckUpdates()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) { Icon(icon, contentDescription = null) }
+            Spacer(Modifier.width(14.dp))
+            Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun ExportSheet(onDismiss: () -> Unit, onSave: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF2B2B30),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                Modifier.size(56.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) { Text("!", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+            Text(
+                "Ваши лайкнутые треки будут сохранены в текстовом формате «Артист - Название» " +
+                    "в стандартную папку Download. После сохранения - треки также останутся доступны в разделе.",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+            )
+            Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) { Text("Сохранить") }
+        }
+    }
+}
+
+/** Icon with a diagonal slash over it ("off" look). */
+@Composable
+private fun CrossedIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    val color = LocalContentColor.current
+    Box(contentAlignment = Alignment.Center) {
+        Icon(icon, contentDescription = null)
+        Canvas(Modifier.size(24.dp)) {
+            drawLine(
+                color = color,
+                start = Offset(3.dp.toPx(), 3.dp.toPx()),
+                end = Offset(21.dp.toPx(), 21.dp.toPx()),
+                strokeWidth = 2.2.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+/** Settings row with a switch: off = gray, on = white. The whole row is clickable. */
+@Composable
+private fun ToggleRow(
+    icon: @Composable () -> Unit,
+    text: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Surface(
+        onClick = { onChange(!checked) },
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) { icon() }
+            Spacer(Modifier.width(14.dp))
+            Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Switch(
+                checked = checked,
+                onCheckedChange = onChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color(0xFF55555B),
+                    checkedTrackColor = Color.White,
+                    checkedBorderColor = Color.Transparent,
+                    uncheckedThumbColor = Color(0xFFC4C4C9),
+                    uncheckedTrackColor = Color(0xFF55555B),
+                    uncheckedBorderColor = Color.Transparent,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PillButton(text: String, container: Color, content: Color, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+    ) { Text(text, fontWeight = FontWeight.Medium) }
+}
+
+/** Update card in the middle of the screen (available update, or "you have the latest version"). */
+@Composable
+private fun UpdateDialog(
+    ui: UpdateUi,
+    onInstall: () -> Unit,
+    onLater: () -> Unit,
+    onSkip: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val gray = Color(0xFF45454B)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnClickOutside = false, usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(32.dp),
+            color = Color(0xFF2B2B30),
+            contentColor = Color.White,
+            modifier = Modifier.fillMaxWidth(0.88f).widthIn(max = 420.dp),
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                when (ui) {
+                    is UpdateUi.Available -> {
+                        Icon(Icons.Rounded.FileDownload, contentDescription = null, modifier = Modifier.size(48.dp))
+                        Text(
+                            "Для приложения вышло обновление ${ui.info.name}. Установить?",
+                            style = MaterialTheme.typography.titleMedium,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        PillButton("Установить", Color.White, Color(0xFF55555B), onInstall)
+                        PillButton("Напомнить позже", gray, Color.White, onLater)
+                        PillButton("Пропустить эту версию", gray, Color.White, onSkip)
+                    }
+                    UpdateUi.UpToDate -> {
+                        Text(
+                            "У вас установлена последняя версия приложения",
+                            style = MaterialTheme.typography.titleMedium,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        PillButton("ОК", gray, Color.White, onDismiss)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun delayLabel(v: Float): String = if (v % 1f == 0f) "${v.toInt()}с" else "${v}с"
+
+/** Track-change delay: 0..5 s in steps of 0.5 s. Applied only with "ОК". */
+@Composable
+private fun DelaySheet(initial: Float, onDismiss: () -> Unit, onOk: (Float) -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var value by remember { mutableFloatStateOf(initial) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF2B2B30),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                Modifier.size(56.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.Schedule, contentDescription = null, modifier = Modifier.size(30.dp)) }
+            Text(
+                "Данная функция позволяет настроить задержку смены трека, когда в плеере обложка и название " +
+                    "меняются раньше, чем начинает звучать трек. Стоит использовать, только если замечаешь расхождение!",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+            )
+            Column(Modifier.fillMaxWidth()) {
+                Slider(
+                    value = value,
+                    onValueChange = { value = Math.round(it * 2f) / 2f },
+                    valueRange = 0f..5f,
+                    steps = 9,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = Color.White,
+                        activeTickColor = Color(0xFF55555B),
+                        inactiveTrackColor = Color(0xFF55555B),
+                        inactiveTickColor = Color(0xFF8A8A90),
+                    ),
+                )
+                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+                    Text("0с", Modifier.align(Alignment.CenterStart), style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        delayLabel(value),
+                        Modifier.align(Alignment.Center),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text("5с", Modifier.align(Alignment.CenterEnd), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            Button(onClick = { onOk(value) }, modifier = Modifier.fillMaxWidth()) { Text("ОК") }
         }
     }
 }

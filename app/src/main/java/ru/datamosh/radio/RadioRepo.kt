@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 const val STREAM_URL = "https://radio.datamosh.ru/listen/datamosh_radio/radio.mp3"
@@ -60,7 +61,33 @@ object RadioRepo {
     private val clients = AtomicInteger(0)
     private var job: Job? = null
     private var lastTrackId: String? = null
+
+    /**
+     * Seconds by which the displayed track change is postponed, so that the cover and title switch
+     * together with the sound (the stream is buffered and lags behind the server). Set in the settings.
+     */
+    @Volatile
+    var delaySeconds: Float = 0f
     private var failing = false
+
+    /** True while the UI or the playback service keeps polling the API. */
+    val polling: Boolean get() = clients.get() > 0
+
+    /** One-shot "what is on air" request (used by the widget when nothing is polling), with two retries. */
+    suspend fun fetchNowPlayingOnce(): Track? = withContext(Dispatchers.IO) {
+        repeat(3) { attempt ->
+            try {
+                val j = JSONObject(String(httpGet(API_URL), Charsets.UTF_8))
+                return@withContext j.getJSONObject("now_playing").getJSONObject("song").toTrack()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("WIDGET", "Now-playing request failed (attempt ${attempt + 1})", e)
+            }
+            if (attempt < 2) delay(1_500)
+        }
+        null
+    }
 
     @Synchronized
     fun acquire() {
@@ -110,6 +137,19 @@ object RadioRepo {
                     failing = false
                     AppLog.d("RADIO", "Now-playing API reachable again")
                 }
+                // The server already reports the new track; the sound reaches the user `delaySeconds` later.
+                val d = delaySeconds
+                val reported = np.optInt("elapsed")
+                var waitedMs = 0L
+                if (lastTrackId != null && lastTrackId != now.track.id && d > 0f) {
+                    waitedMs = (d * 1000f).toLong() - reported * 1000L
+                    if (waitedMs > 0) {
+                        AppLog.d("RADIO", "Postponing the track change by $waitedMs ms (delay setting ${d}s)")
+                        delay(waitedMs)
+                    } else {
+                        waitedMs = 0L
+                    }
+                }
                 if (lastTrackId != now.track.id) {
                     lastTrackId = now.track.id
                     AppLog.d("RADIO", "Now playing: ${now.track.artist} - ${now.track.title} (${np.optInt("duration")}s)")
@@ -118,7 +158,8 @@ object RadioRepo {
                 _state.value = RadioState(
                     now = now.track,
                     next = next,
-                    elapsed = np.optInt("elapsed"),
+                    // Position of the sound = server position minus the delay.
+                    elapsed = (reported + waitedMs / 1000f - d).coerceAtLeast(0f).toInt(),
                     duration = np.optInt("duration"),
                     fetchedAt = System.currentTimeMillis(),
                     history = top,
